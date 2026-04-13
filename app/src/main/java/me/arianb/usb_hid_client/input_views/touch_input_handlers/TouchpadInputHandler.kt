@@ -1,43 +1,22 @@
-package me.arianb.usb_hid_client.input_views
+package me.arianb.usb_hid_client.input_views.touch_input_handlers
 
-import android.content.res.Configuration.ORIENTATION_LANDSCAPE
+import android.content.res.Configuration
 import android.os.Build
 import android.view.InputDevice
 import android.view.MotionEvent
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import me.arianb.usb_hid_client.MainViewModel
-import me.arianb.usb_hid_client.R
 import me.arianb.usb_hid_client.report_senders.pointer_device_senders.PointerDeviceSender
+import me.arianb.usb_hid_client.report_senders.pointer_device_senders.TouchpadSender
 import timber.log.Timber
 
-private class TouchInputHandler {
+class TouchpadInputHandler(
+    private val touchpadSender: TouchpadSender
+) : PointerDeviceInputHandler() {
     private var currentScanTime: UShort = getScanTime()
 
     fun handleTouchMotionEvent(
-        touchpadSender: PointerDeviceSender,
         motionEvent: MotionEvent,
         deviceOrientation: Int,
+        touchpadButtonState: PointerDeviceSender.TouchpadButtonState,
     ): Boolean {
         val (pointerID, pointerX, pointerY) = getPointerTriple(
             motionEvent,
@@ -51,41 +30,70 @@ private class TouchInputHandler {
         }
 
         val pointerCount = motionEvent.pointerCount
+
+        val handlePointerDown = {
+            touchpadSender.send(
+                pointerID,
+                true,
+                pointerX, pointerY,
+                currentScanTime,
+                pointerCount,
+                touchpadButtonState
+            )
+        }
+        val handlePointerUp = {
+            touchpadSender.send(
+                pointerID,
+                false,
+                pointerX,
+                pointerY,
+                currentScanTime,
+                pointerCount,
+                // Un-press the buttons on release
+                PointerDeviceSender.TouchpadButtonState(
+                    isLeftButtonPressed = false,
+                    isRightButtonPressed = false
+                )
+            )
+        }
+
         when (val action = motionEvent.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 Timber.v("Action Down")
-                touchpadSender.send(pointerID, true, pointerX, pointerY, currentScanTime, pointerCount)
+                handlePointerDown()
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
                 Timber.v("Action Pointer Down")
-                touchpadSender.send(pointerID, true, pointerX, pointerY, currentScanTime, pointerCount)
+                handlePointerDown()
+            }
+
+            MotionEvent.ACTION_UP -> {
+                Timber.v("Action Up")
+                handlePointerUp()
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                Timber.v("Action Pointer Up")
+                handlePointerUp()
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                Timber.v("Action Cancel")
+                handlePointerUp()
             }
 
             MotionEvent.ACTION_MOVE -> {
                 Timber.v("Action Move")
                 for (index in 0..<pointerCount) {
-                    val (thisID, thisX, thisY) = getPointerTriple(motionEvent, index, deviceOrientation)
+                    val (thisID, thisX, thisY) = getPointerTriple(
+                        motionEvent,
+                        index,
+                        deviceOrientation
+                    )
 
-                    touchpadSender.send(thisID, true, thisX, thisY, currentScanTime, pointerCount)
+                    touchpadSender.send(thisID, true, thisX, thisY, currentScanTime, pointerCount, touchpadButtonState)
                 }
-            }
-
-            MotionEvent.ACTION_UP -> {
-                Timber.v("Action Up")
-                touchpadSender.send(
-                    pointerID, false, pointerX, pointerY, currentScanTime, pointerCount
-                )
-            }
-
-            MotionEvent.ACTION_POINTER_UP -> {
-                Timber.v("Action Pointer Up")
-                touchpadSender.send(pointerID, false, pointerX, pointerY, currentScanTime, pointerCount)
-            }
-
-            MotionEvent.ACTION_CANCEL -> {
-                Timber.v("Action Cancel")
-                touchpadSender.send(pointerID, false, pointerX, pointerY, currentScanTime, pointerCount)
             }
 
             else -> {
@@ -122,18 +130,19 @@ private class TouchInputHandler {
             // --- end of unsafe code ---
 
             // The underlying touchpad report descriptor says it's physically "portrait" (taller than it is wide, like a phone).
-            // If the device itself is actually wider than it is tall ("landscape"), we need to know, so we can adjust the math.
+            // If the device itself is actually wider than it is tall ("landscape"), we need to know, so we can adjust the math
+            // so that the speed of movement across the physical screen is more accurately relayed to the device. Otherwise,
+            // a long swipe from the bottom to the top of a tall screen would be normal speed while portrait, but cause
+            // a very slow swipe when the device is turned landscape.
             //
             // Note:
-            //  We cannot just swap x and y values to fix things, because the target device needs to know what physical
+            //  We cannot just swap x and y values to fix this problem, because the target device needs to know what physical
             //  directions the user is inputting. Otherwise, things like an upward swipe gesture, might be registered as a swipe
             //  to the right or left instead.
             //
             // If orientation is ORIENTATION_PORTRAIT or ORIENTATION_UNKNOWN or just anything other than landscape, treat it
             // as being in portrait.
-            val isPortrait = deviceOrientation != ORIENTATION_LANDSCAPE
-
-            Timber.d("motionEvent.orientation = %f", motionEvent.orientation)
+            val isPortrait = deviceOrientation != Configuration.ORIENTATION_LANDSCAPE
 
             val (pointerX, pointerY) = adjustRange(
                 point = Pair(rawPointerX.toInt(), rawPointerY.toInt()),
@@ -141,7 +150,11 @@ private class TouchInputHandler {
                 isPortrait
             )
 
-            return Triple(pointerID, pointerX, pointerY)
+            val pointerTriple = Triple(pointerID, pointerX, pointerY)
+
+            Timber.d("getPointerTriple() returning: $pointerTriple")
+
+            return pointerTriple
         }
 
         // "Stretches" the values of the points to use up the entire logical range.
@@ -152,9 +165,11 @@ private class TouchInputHandler {
             Timber.d("DEVICE COORDINATE MAX = (%f, %f)", max.first, max.second)
 
             val (logicalMaxX, logicalMaxY) = if (isPortrait) {
+                // FIXME:
+                //  this is not wide enough for the user to be able to easily click the "left" half of the touchpad
+                //  for the OS to interpret as a left-click. Or more specifically, it is too small a width to be comfortable.
                 Pair(2500, 5000)
             } else {
-                // This works, but I'm not sure if it's okay to just be sending values higher than the logical maximum
                 Pair(5000, 2500)
             }
 
@@ -171,10 +186,15 @@ private class TouchInputHandler {
             val adjustedY = (point.second * yRatio).toInt()
 
             // This will probably never actually be necessary, but might as well do it just in case.
-            val finalX = adjustedX.coerceIn(0, logicalMaxX)
-            val finalY = adjustedY.coerceIn(0, logicalMaxY)
+            val finalX = adjustedX/*.coerceIn(0, logicalMaxX)*/
+            val finalY = adjustedY/*.coerceIn(0, logicalMaxY)*/
 
-            return Pair(finalX, finalY)
+            return if (false) {
+                // center the x value within the logical range [5000, 5000]
+                Pair(finalX + (logicalMaxX / 2), finalY)
+            } else {
+                Pair(finalX, finalY)
+            }
         }
 
         private fun getScanTime(): UShort {
@@ -190,67 +210,22 @@ private class TouchInputHandler {
         /**
          * Helper function to convert between types.
          */
-        private fun PointerDeviceSender.send(
+        private fun TouchpadSender.send(
             pointerID: Int,
             tipSwitch: Boolean,
             x: Int,
             y: Int,
             currentScanTime: UShort,
-            pointerCount: Int
+            pointerCount: Int,
+            touchpadButtonState: PointerDeviceSender.TouchpadButtonState
         ) = send(
             pointerID.toByte(),
             tipSwitch,
             x.toShort(),
             y.toShort(),
             currentScanTime,
-            pointerCount.toByte()
-        )
-    }
-}
-
-@Composable
-fun Touchpad(
-    mainViewModel: MainViewModel = viewModel()
-) {
-    val pointerDeviceSender by mainViewModel.touchpadSender.collectAsState()
-
-    Column(
-        modifier = Modifier
-            .fillMaxHeight()
-            .fillMaxWidth(),
-        verticalArrangement = Arrangement.SpaceAround,
-    ) {
-        TouchpadContactSurfaceArea(modifier = Modifier.weight(1f), pointerDeviceSender)
-    }
-}
-
-@Composable
-private fun TouchpadContactSurfaceArea(
-    modifier: Modifier = Modifier,
-    touchpadSender: PointerDeviceSender,
-) {
-    val touchInputHandler = remember { TouchInputHandler() }
-
-    val deviceOrientation = LocalConfiguration.current.orientation
-
-    Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInteropFilter { motionEvent: MotionEvent ->
-                touchInputHandler.handleTouchMotionEvent(
-                    touchpadSender,
-                    motionEvent,
-                    deviceOrientation,
-                )
-            }
-            .then(modifier),
-        color = MaterialTheme.colorScheme.background,
-        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-    ) {
-        Text(
-            text = stringResource(R.string.touchpad_label),
-            modifier = Modifier.wrapContentHeight(Alignment.CenterVertically),
-            textAlign = TextAlign.Center
+            pointerCount.toByte(),
+            touchpadButtonState
         )
     }
 }
