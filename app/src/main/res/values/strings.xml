@@ -2,7 +2,7 @@
     <!-- Note: Remember to escape quotes, I forgot one time and Android Studio didn't give me a warning and I just got an unbelievably unhelpful build error -->
 
     <!-- Main Screen -->
-    <string name="app_name" translatable="false">USB HID Client</string>
+    <string name="app_name" translatable="false">c2q HID Client</string>
     <string name="direct_input">Direct Input</string> <!-- Reused as preference category header -->
     <string name="manual_input">Manual Input</string> <!-- Reused as preference category header -->
     <string name="touchpad_label">Touchpad</string> <!-- Reused as preference category header -->

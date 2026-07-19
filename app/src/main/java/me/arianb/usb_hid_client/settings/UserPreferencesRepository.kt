@@ -2,18 +2,15 @@ package me.arianb.usb_hid_client.settings
 
 import android.app.Application
 import android.content.SharedPreferences
-import android.os.Parcelable
 import androidx.annotation.StringRes
 import androidx.preference.PreferenceManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.parcelize.Parcelize
 import me.arianb.usb_hid_client.R
 import me.arianb.usb_hid_client.hid_utils.CharacterDeviceManager
 import me.arianb.usb_hid_client.hid_utils.KeyboardDevicePath
 import me.arianb.usb_hid_client.hid_utils.TouchpadDevicePath
-import me.arianb.usb_hid_client.hid_utils.UsbGadgetPath
 
 sealed class AppPreference(val preference: PreferenceKey<*>) {
     data object OnboardingDoneKey : BooleanPreferenceKey("onboarding_done", false)
@@ -38,12 +35,6 @@ sealed class AppPreference(val preference: PreferenceKey<*>) {
     data object LoopbackMode : BooleanPreferenceKey("loopback_mode", false)
     data object ExperimentalMode : BooleanPreferenceKey("experimental_mode", false)
     data object TouchpadFullscreenInLandscape : BooleanPreferenceKey("touchpad_fullscreen_in_landscape", false)
-    data object UsbGadgetPathPref : ObjectPreferenceKey<UsbGadgetPath>(
-        "usb_gadget_path", UsbGadgetPath("/config/usb_gadget/g1"),
-        fromStringPreference = { UsbGadgetPath(it) },
-        toStringPreference = { it.path }
-    )
-
     data object KeyboardCharacterDevicePath : ObjectPreferenceKey<KeyboardDevicePath>(
         "keyboard_character_device_path", CharacterDeviceManager.Companion.DevicePaths.DEFAULT_KEYBOARD_DEVICE_PATH,
         fromStringPreference = { KeyboardDevicePath(it) },
@@ -56,12 +47,6 @@ sealed class AppPreference(val preference: PreferenceKey<*>) {
         toStringPreference = { it.path }
     )
 
-    data object CreateNewGadgetForFunctions : BooleanPreferenceKey("create_new_gadget_for_functions", false)
-
-    data object DisableGadgetFunctionsDuringConfiguration :
-        BooleanPreferenceKey("disable_gadget_functions_during_config", false)
-
-    data object EnablePrecisionTouchpad : BooleanPreferenceKey("enable_precision_touchpad", false)
 }
 
 sealed class SealedString(val key: String, @StringRes val id: Int)
@@ -90,32 +75,9 @@ data class UserPreferences(
     val isLoopbackModeEnabled: Boolean,
     val isTouchpadFullscreenInLandscape: Boolean,
     val isExperimentalModeEnabled: Boolean,
-    val usbGadgetPath: UsbGadgetPath,
     val keyboardCharacterDevicePath: KeyboardDevicePath,
     val touchpadCharacterDevicePath: TouchpadDevicePath,
-    val createNewGadgetForFunctions: Boolean,
-    val disableGadgetFunctionsDuringConfiguration: Boolean,
-    val enablePrecisionTouchpad: Boolean,
 )
-
-@Parcelize
-data class GadgetUserPreferences(
-    val usbGadgetPath: UsbGadgetPath,
-    val createNewGadgetForFunctions: Boolean,
-    val disableGadgetFunctionsDuringConfiguration: Boolean,
-    val enablePrecisionTouchpad: Boolean,
-) : Parcelable {
-    companion object {
-        fun fromUserPreferences(userPreferences: UserPreferences): GadgetUserPreferences {
-            return GadgetUserPreferences(
-                usbGadgetPath = userPreferences.usbGadgetPath,
-                createNewGadgetForFunctions = userPreferences.createNewGadgetForFunctions,
-                disableGadgetFunctionsDuringConfiguration = userPreferences.disableGadgetFunctionsDuringConfiguration,
-                enablePrecisionTouchpad = userPreferences.enablePrecisionTouchpad,
-            )
-        }
-    }
-}
 
 class UserPreferencesRepository private constructor(application: Application) {
     private val sharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(application)
@@ -138,12 +100,8 @@ class UserPreferencesRepository private constructor(application: Application) {
                 isLoopbackModeEnabled = AppPreference.LoopbackMode.getValue(),
                 isTouchpadFullscreenInLandscape = AppPreference.TouchpadFullscreenInLandscape.getValue(),
                 isExperimentalModeEnabled = AppPreference.ExperimentalMode.getValue(),
-                usbGadgetPath = AppPreference.UsbGadgetPathPref.getValue(),
                 keyboardCharacterDevicePath = AppPreference.KeyboardCharacterDevicePath.getValue(),
                 touchpadCharacterDevicePath = AppPreference.TouchpadCharacterDevicePath.getValue(),
-                createNewGadgetForFunctions = AppPreference.CreateNewGadgetForFunctions.getValue(),
-                disableGadgetFunctionsDuringConfiguration = AppPreference.DisableGadgetFunctionsDuringConfiguration.getValue(),
-                enablePrecisionTouchpad = AppPreference.EnablePrecisionTouchpad.getValue(),
             )
         }
 

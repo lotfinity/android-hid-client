@@ -1,5 +1,54 @@
 <div id="top"></div>
 
+# c2q HID Client Fork
+
+This branch adapts `Arian04/android-hid-client` for the Samsung Galaxy Note20 Ultra Snapdragon `c2q` running the
+`c2q-nethunter-companion` Magisk module.
+
+The Android app no longer creates, deletes, unbinds, binds, or rewrites USB ConfigFS gadget state directly. It calls the
+installed module command instead:
+
+```sh
+/data/adb/modules/c2q_nethunter_companion/bin/c2q-usb hid-keyboard-mouse
+/data/adb/modules/c2q_nethunter_companion/bin/c2q-usb restore
+```
+
+Supported in this first client build:
+
+* `/dev/hidg0`: 8-byte boot keyboard reports.
+* `/dev/hidg1`: 4-byte standard relative mouse reports.
+* Manual activation from the app UI.
+* Manual Samsung USB restore from the app UI; the module watchdog is optional.
+
+Not supported in this first client build:
+
+* Consumer/media keys from the app UI. The current safe app profile uses keyboard + mouse only.
+* Precision touchpad mode. The current module endpoint is a standard mouse, not the original app's 12-byte precision
+  touchpad descriptor.
+* HID-4 mode. Use `c2q-usb hid4` from a root shell for controlled module-level testing only.
+
+Build command:
+
+```sh
+./gradlew --no-daemon assembleDebug
+```
+
+Device test flow:
+
+```sh
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell su -c '/data/adb/modules/c2q_nethunter_companion/bin/c2q-usb status'
+```
+
+Open `c2q HID Client`, grant root, tap `Activate HID`, test keyboard/mouse against a host, then tap `Restore USB`.
+If ADB disappears, restore from a local root shell or wait for the module watchdog only when you chose a timeout:
+
+```sh
+su -c /data/adb/modules/c2q_nethunter_companion/bin/c2q-usb restore
+```
+
+---
+
 <!-- PROJECT SHIELDS -->
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]

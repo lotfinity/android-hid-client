@@ -1,165 +1,124 @@
 package me.arianb.usb_hid_client.hid_utils
 
 import android.app.Application
-import android.content.Intent
 import com.topjohnwu.superuser.Shell
-import com.topjohnwu.superuser.ipc.RootService
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import me.arianb.usb_hid_client.settings.GadgetUserPreferences
 import me.arianb.usb_hid_client.shell_utils.RootStateHolder
 import timber.log.Timber
 import java.io.File
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 
 class CharacterDeviceManager private constructor(private val application: Application) {
     private val rootStateHolder = RootStateHolder.getInstance()
 
-    private val mConnection = UsbGadgetServiceConnection()
+    suspend fun createCharacterDevices(): C2qUsbResult {
+        val activation = C2qUsbController.activateKeyboardMouse()
+        if (!activation.success) return activation
 
-    @Throws(TimeoutCancellationException::class)
-    private suspend fun ensureServiceIsBound(
-        timeout: Duration = 5000.milliseconds,
-        pollInterval: Duration = 500.milliseconds
-    ) {
-        if (!mConnection.isBound) {
-            Intent(application, UsbGadgetService::class.java).also { intent ->
-                RootService.bind(intent, mConnection)
+        return withContext(Dispatchers.IO) {
+            if (!fixSelinuxPermissions()) {
+                C2qUsbController.restore()
+                return@withContext C2qUsbResult(
+                    false,
+                    "HID activated, but the app-specific SELinux rule failed; Samsung USB was restored",
+                )
             }
-        }
 
-        withTimeout(timeout) {
-            // wait until the service is bound before trying to use it
-            while (!mConnection.isBound) {
-                Timber.d("not bound yet, sleeping for a bit before trying again...")
-                delay(pollInterval)
+            val devicesReady = waitForRequiredDevices()
+            if (!devicesReady) {
+                C2qUsbController.restore()
+                return@withContext C2qUsbResult(
+                    false,
+                    "HID nodes did not appear; Samsung USB was restored",
+                )
             }
-            Timber.d("service is bound now!!!")
-        }
-    }
 
-    private suspend fun useService(block: suspend (UsbGadgetServiceConnection) -> Unit) {
-        try {
-            ensureServiceIsBound()
-        } catch (e: TimeoutCancellationException) {
-            Timber.e("Failed to bind service within timeout duration: $e")
-            return
-        }
-
-        block(mConnection)
-
-        if (mConnection.isBound) {
-            RootService.unbind(mConnection)
-        }
-    }
-
-    suspend fun createCharacterDevices(gadgetUserPreferences: GadgetUserPreferences) {
-        useService {
-            it.createGadget(gadgetUserPreferences)
-        }
-
-        withContext(Dispatchers.IO) {
-            fixSelinuxPermissions()
-
-            launch {
-                for (devicePath in DevicePaths.all) {
-                    try {
-                        withTimeout(3000) {
-                            // wait until the device file exists before trying to fix its permissions
-                            while (!devicePath.exists()) {
-                                Timber.d("$devicePath doesn't exist yet, sleeping for a bit before trying again...")
-                                delay(200)
-                            }
-                            Timber.d("$devicePath exists now!!!")
-                        }
-                        fixCharacterDevicePermissions(devicePath)
-                    } catch (e: TimeoutCancellationException) {
-                        // FIXME: show this error to the user
-                        Timber.e("Timed out while waiting for character device '$devicePath' to be created.")
-                    }
-                }
+            val permissionsReady = DevicePaths.all.all { fixCharacterDevicePermissions(it.path) }
+            if (!permissionsReady) {
+                C2qUsbController.restore()
+                return@withContext C2qUsbResult(
+                    false,
+                    "Could not grant access to the HID nodes; Samsung USB was restored",
+                )
             }
+
+            activation
         }
     }
 
-    private fun fixSelinuxPermissions() {
-        val selinuxPolicyCommand = "${rootStateHolder.sepolicyCommand} '$SELINUX_POLICY'"
-        Shell.cmd(selinuxPolicyCommand).exec()
-    }
+    suspend fun deleteCharacterDevices(): C2qUsbResult = C2qUsbController.restore()
 
-    fun fixCharacterDevicePermissions(device: DevicePath) = fixCharacterDevicePermissions(device.path)
-
-    fun fixCharacterDevicePermissions(device: String) {
-        val appUID: Int = application.applicationInfo.uid
-
-        // Set Linux permissions -> only my app user can r/w to the char device
-        val chownCommand = "chown '${appUID}:${appUID}' $device"
-        val chmodCommand = "chmod 600 $device"
-        Shell.cmd(chownCommand).exec()
-        Shell.cmd(chmodCommand).exec()
-
-        // Set SELinux permissions -> only my app's selinux context can r/w to the char device
-        val chconCommand = "chcon 'u:object_r:device:s0:${getSelinuxCategories()}' $device"
-        Shell.cmd(chconCommand).exec()
-
-        return
-    }
-
-    private fun getSelinuxCategories(): String {
-        val appDataDirPath: String = application.applicationInfo.dataDir
-
-        // Get selinux context for app
-        val commandResult = Shell.cmd("stat -c %C $appDataDirPath").exec()
-
-        val selinuxContextString = commandResult.out.joinToString(separator = "\n").trim()
-
-        // Get the part of the context that I need (categories) by grabbing everything after the last ':'
-        val categories = selinuxContextString.substringAfterLast(':')
-
-        // If it hasn't changed, then the previous piece of code failed to get the substring
-        if (categories == selinuxContextString) {
-            Timber.wtf("Failed to get app's selinux context")
+    private suspend fun waitForRequiredDevices(): Boolean {
+        repeat(20) {
+            if (DevicePaths.all.all { it.exists() }) return true
+            delay(200)
         }
-
-        Timber.d("context (before,after): (%s,%s)", selinuxContextString, categories)
-
-        return categories
-    }
-
-    suspend fun deleteCharacterDevices(gadgetUserPreferences: GadgetUserPreferences) {
-        useService {
-            it.deleteGadget(gadgetUserPreferences)
-        }
-    }
-
-    @ModifiesStateDirectly
-    fun characterDeviceMissing(charDevicePath: DevicePath): Boolean {
-        val isCharDevMissing = if (!DevicePaths.all.contains(charDevicePath)) {
-            true
-        } else !charDevicePath.exists()
-
-        return isCharDevMissing
-    }
-
-    @ModifiesStateDirectly
-    fun anyCharacterDeviceMissing(): Boolean {
-        for (charDevicePath in DevicePaths.all) {
-            if (!charDevicePath.exists()) {
-                return true
-            }
-        }
-
         return false
     }
 
+    private fun fixSelinuxPermissions(): Boolean {
+        val policyCommand = rootStateHolder.sepolicyCommand ?: return false
+        val appDomain = getAppProcessSelinuxDomain() ?: return false
+        val policy = "allow $appDomain device chr_file { getattr open read write ioctl }"
+        return Shell.cmd("$policyCommand '$policy'").exec().code == 0
+    }
+
+    fun fixCharacterDevicePermissions(device: DevicePath): Boolean =
+        fixCharacterDevicePermissions(device.path)
+
+    fun fixCharacterDevicePermissions(device: String): Boolean {
+        if (device !in ALLOWED_HID_PATHS) {
+            Timber.e("Refusing unexpected HID device path: %s", device)
+            return false
+        }
+
+        val appUID = application.applicationInfo.uid
+        val categories = getSelinuxCategories() ?: return false
+        val commands = arrayOf(
+            "chown $appUID:$appUID $device",
+            "chmod 600 $device",
+            "chcon u:object_r:device:s0:$categories $device",
+        )
+        return commands.all { Shell.cmd(it).exec().code == 0 }
+    }
+
+    private fun getAppSelinuxContext(): String? {
+        val result = Shell.cmd("stat -c %C ${application.applicationInfo.dataDir}").exec()
+        if (result.code != 0) return null
+        return result.out.joinToString("\n").trim().takeIf { it.isNotBlank() }
+    }
+
+    private fun getAppProcessSelinuxDomain(): String? {
+        val packageName = application.packageName
+        val result = Shell.cmd(
+            "PID=\$(pidof $packageName 2>/dev/null | awk '{print \$1}'); " +
+                "[ -n \"\$PID\" ] && cat /proc/\$PID/attr/current",
+        ).exec()
+        if (result.code != 0) return null
+        val processContext = result.out.joinToString("\n").trim().takeIf { it.isNotBlank() } ?: return null
+        val domain = processContext.split(':').getOrNull(2) ?: return null
+        return domain.takeIf { it.matches(Regex("[A-Za-z0-9_]+")) }
+    }
+
+    private fun getSelinuxCategories(): String? {
+        val context = getAppSelinuxContext() ?: return null
+        val categories = context.substringAfterLast(':')
+        return categories.takeIf { it.matches(Regex("c[0-9]+(?:,c[0-9]+)*")) }
+    }
+
+    @ModifiesStateDirectly
+    fun characterDeviceMissing(charDevicePath: DevicePath): Boolean =
+        charDevicePath !in DevicePaths.all || !charDevicePath.exists()
+
+    @ModifiesStateDirectly
+    fun anyCharacterDeviceMissing(): Boolean = DevicePaths.all.any { !it.exists() }
+
     companion object {
+        private val ALLOWED_HID_PATHS = setOf("/dev/hidg0", "/dev/hidg1")
+
         object DevicePaths {
             val DEFAULT_KEYBOARD_DEVICE_PATH = KeyboardDevicePath("/dev/hidg0")
             val DEFAULT_TOUCHPAD_DEVICE_PATH = TouchpadDevicePath("/dev/hidg1")
@@ -174,45 +133,25 @@ class CharacterDeviceManager private constructor(private val application: Applic
                 get() = listOf(keyboard.value, touchpad.value)
         }
 
-        // SELinux stuff
-        private const val SELINUX_DOMAIN = "appdomain"
-        private const val SELINUX_POLICY = "allow $SELINUX_DOMAIN device chr_file { getattr open read write }"
-
         @Volatile
         private var INSTANCE: CharacterDeviceManager? = null
-        fun getInstance(application: Application): CharacterDeviceManager {
-            return INSTANCE ?: synchronized(this) {
-                INSTANCE?.let {
-                    return it
-                }
 
-                val instance = CharacterDeviceManager(application)
-                INSTANCE = instance
-                instance
+        fun getInstance(application: Application): CharacterDeviceManager =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: CharacterDeviceManager(application).also { INSTANCE = it }
             }
-        }
     }
 }
 
-private fun logShellCommandResult(label: String, commandResult: Shell.Result) {
-    with(commandResult) {
-        Timber.i("${label}: \nexit code=%d\nstdout=%s\nstderr=%s", code, out, err)
-    }
-}
-
-// This annotation is to help me ensure that I don't accidentally bypass my ViewModel wrappers when calling certain
-// methods from inside ViewModel. For example, by calling CharacterDeviceManager.anyCharacterDeviceMissing directly without
-// updating the state at the call site.
 @Retention(value = AnnotationRetention.BINARY)
 @RequiresOptIn(
     level = RequiresOptIn.Level.ERROR,
-    message = "Ensure to update state when calling this method. You will usually want to be calling the ViewModel wrappers instead"
+    message = "Ensure UI state is updated when calling this method",
 )
 annotation class ModifiesStateDirectly
 
 interface DevicePath {
     val path: String
-
     fun exists(): Boolean = File(path).exists()
 }
 

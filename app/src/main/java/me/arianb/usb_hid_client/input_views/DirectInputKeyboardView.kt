@@ -8,15 +8,19 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import androidx.appcompat.widget.AppCompatEditText
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidViewBinding
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.arianb.usb_hid_client.MainViewModel
@@ -62,6 +66,9 @@ fun DirectInput(
     val userPreferencesState by settingsViewModel.userPreferencesFlow.collectAsState()
 
     AndroidViewBinding(
+        modifier = Modifier
+            .size(1.dp)
+            .alpha(0f),
         factory = DirectInputViewBinding::inflate,
         update = {
             // Forces the input method to run in a limited mode that generates raw `KeyEvent`s, which
@@ -94,11 +101,12 @@ fun DirectInput(
 }
 
 @Composable
-fun DirectInputIconButton() {
+fun DirectInputIconButton(enabled: Boolean = true) {
     val localView = LocalView.current
     val context = LocalContext.current
 
     IconButton(
+        enabled = enabled,
         onClick = {
             val etDirectInput = localView.findViewById<DirectInputKeyboardView>(R.id.etDirectInput)
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager

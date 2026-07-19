@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "me.arianb.usb_hid_client"
     defaultConfig {
-        applicationId = "me.arianb.usb_hid_client"
+        applicationId = "dev.lofa.c2q_hid_client"
 
         // SDK support
         minSdk = 26
@@ -16,8 +16,8 @@ android {
         compileSdk = 35
 
         // App Versioning
-        versionCode = 301
-        versionName = "v3.0.1"
+        versionCode = 303
+        versionName = "v3.0.1-c2q5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -161,7 +161,6 @@ dependencies {
 
     // Root helper library
     implementation(libs.libsu.core)
-    implementation(libs.libsu.service)
 
     // Navigation
     implementation(libs.voyager.navigator)

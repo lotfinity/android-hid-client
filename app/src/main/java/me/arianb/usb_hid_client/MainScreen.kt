@@ -1,26 +1,37 @@
 package me.arianb.usb_hid_client
 
-import android.content.res.Configuration
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,8 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -37,7 +48,8 @@ import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import me.arianb.usb_hid_client.input_views.DirectInput
 import me.arianb.usb_hid_client.input_views.DirectInputIconButton
-import me.arianb.usb_hid_client.input_views.ManualInput
+import me.arianb.usb_hid_client.input_views.HidShortcutPanel
+import me.arianb.usb_hid_client.input_views.MouseButtonBar
 import me.arianb.usb_hid_client.input_views.Touchpad
 import me.arianb.usb_hid_client.settings.SettingsScreen
 import me.arianb.usb_hid_client.settings.SettingsViewModel
@@ -46,9 +58,9 @@ import me.arianb.usb_hid_client.troubleshooting.TroubleshootingScreen
 import me.arianb.usb_hid_client.ui.standalone_screens.HelpScreen
 import me.arianb.usb_hid_client.ui.standalone_screens.InfoScreen
 import me.arianb.usb_hid_client.ui.theme.PaddingNormal
-import me.arianb.usb_hid_client.ui.utils.BasicPage
 import me.arianb.usb_hid_client.ui.utils.BasicTopBar
 import me.arianb.usb_hid_client.ui.utils.DarkLightModePreviews
+import me.arianb.usb_hid_client.ui.theme.USBHIDClientTheme
 import timber.log.Timber
 
 class MainScreen : Screen {
@@ -66,91 +78,107 @@ fun MainPage(
     val rootStateHolder = RootStateHolder.getInstance()
     val rootState by rootStateHolder.uiState.collectAsState()
 
-    // TODO: should i do this in VM constructor? but then I cant differentiate between
-    //       missing char dev on startup or a weird issue of it missing AFTER startup.
-    //       but should I even do that? should I just handle both situations the same way?
-    val showMissingCharDeviceOnStartupAlert = remember { mutableStateOf(mainViewModel.anyCharacterDeviceMissing()) }
-
     val uiState by mainViewModel.uiState.collectAsState()
     Timber.d("in MainScreen, uiState is: %s", uiState.toString())
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var showShortcutPanel by remember { mutableStateOf(false) }
 
-    val preferences by settingsViewModel.userPreferencesFlow.collectAsState()
-    val isDeviceInLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val hideManualInput = preferences.isTouchpadFullscreenInLandscape && isDeviceInLandscape
+    val hidUiUnlocked = uiState.usbProfileActive &&
+        !uiState.missingCharacterDevice &&
+        uiState.isCharacterDevicePermissionsBroken == null &&
+        !rootState.missingRootPrivileges
 
-    val padding = PaddingNormal
-    BasicPage(
-        snackbarHostState = snackbarHostState,
-        topBar = { MainTopBar() },
-
-        // The padding below the top app bar is pretty big, so omit top padding
-        padding = PaddingValues(start = padding, end = padding, bottom = padding),
-
-        horizontalAlignment = Alignment.CenterHorizontally,
-
-        // I have to manually manage the spacing of elements here, because of the special case of having an invisible
-        // View (Direct Input). Otherwise, there's gonna be an awkward spacing created by the invisible View.
-        verticalArrangement = Arrangement.Top
-    ) {
-        if (showMissingCharDeviceOnStartupAlert.value) {
-            Timber.d("MISSING CHAR DEV ON START")
-            CreateCharDevicesAlertDialog(showMissingCharDeviceOnStartupAlert)
-        }
-
-        if (!hideManualInput) {
-            ManualInput()
-            Spacer(Modifier.height(PaddingNormal))
-        }
-
-        // This has to be here, if I move it below Touchpad(), it never gets focused. I think it's because it ends up
-        // out of the user's view, so Android just doesn't allow it to gain focus.
-        DirectInput()
-
-        Touchpad()
-
-        LaunchedEffect(uiState) {
-            Timber.d("LAUNCHED EFFECT RUNNING WITH UI STATE = %s", uiState.toString())
-            if (rootState.missingRootPrivileges) {
-                // TODO: if this fails here, I need to make it incredibly clear that the app will not work.
-                //       right now, you can still try to use it and it'll fail. It should just "lock" the inputs
-                //       if this fails I think.
-                snackbarHostState.showSnackbar(
-                    message = "Missing root permissions",
-                    duration = SnackbarDuration.Long
-                )
-            } else if (uiState.isDeviceUnplugged) {
-                snackbarHostState.showSnackbar(
-                    message = "ERROR: Your device seems to be disconnected. If not, try reseating the USB cable",
-                    duration = SnackbarDuration.Long
-                )
-            } else if (!showMissingCharDeviceOnStartupAlert.value && uiState.missingCharacterDevice) {
-                val result = snackbarHostState.showSnackbar(
-                    message = "ERROR: Character device has disappeared since the app was started.",
-                    actionLabel = "RECREATE",
-                )
-                when (result) {
-                    SnackbarResult.ActionPerformed -> {
-                        mainViewModel.createCharacterDevices()
+    USBHIDClientTheme {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Scaffold(
+                topBar = { MainTopBar() },
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                ) {
+                    if (hidUiUnlocked) {
+                        Touchpad(
+                            modifier = Modifier.fillMaxSize(),
+                            mainViewModel = mainViewModel,
+                            showBorder = false,
+                        )
+                        DirectInput(
+                            mainViewModel = mainViewModel,
+                            settingsViewModel = settingsViewModel,
+                        )
+                        MouseButtonBar(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 64.dp),
+                            mainViewModel = mainViewModel,
+                        )
                     }
 
-                    SnackbarResult.Dismissed -> {}
-                }
-            } else if (uiState.isCharacterDevicePermissionsBroken != null) {
-                val characterDevicePath = uiState.isCharacterDevicePermissionsBroken!!
-                val result = snackbarHostState.showSnackbar(
-                    message = "ERROR: Character device permissions seem incorrect.",
-                    actionLabel = "FIX",
-                )
-                when (result) {
-                    SnackbarResult.ActionPerformed -> {
-                        mainViewModel.fixCharacterDevicePermissions(characterDevicePath)
+                    if (showShortcutPanel && hidUiUnlocked) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .padding(
+                                    start = PaddingNormal,
+                                    end = PaddingNormal,
+                                    bottom = 144.dp,
+                                )
+                                .heightIn(max = 380.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            tonalElevation = 6.dp,
+                            shadowElevation = 6.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(PaddingNormal),
+                            ) {
+                                HidShortcutPanel(mainViewModel = mainViewModel)
+                            }
+                        }
                     }
 
-                    SnackbarResult.Dismissed -> {}
+                    MainBottomBar(
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        hidUiUnlocked = hidUiUnlocked,
+                        controlsExpanded = showShortcutPanel,
+                        usbOperationInProgress = uiState.usbOperationInProgress,
+                        onControlsClicked = { showShortcutPanel = !showShortcutPanel },
+                        onRestoreClicked = {
+                            showShortcutPanel = false
+                            mainViewModel.deleteCharacterDevices()
+                        },
+                        onRefreshClicked = { mainViewModel.refreshUsbStatus() },
+                    )
+
+                    if (!hidUiUnlocked || uiState.usbOperationInProgress) {
+                        HidActivationDialog(
+                            uiState = uiState,
+                            missingRoot = rootState.missingRootPrivileges,
+                            mainViewModel = mainViewModel,
+                        )
+                    }
                 }
             }
+        }
+    }
+
+    LaunchedEffect(uiState) {
+        Timber.d("LAUNCHED EFFECT RUNNING WITH UI STATE = %s", uiState.toString())
+        if (uiState.isDeviceUnplugged) {
+            snackbarHostState.showSnackbar(
+                message = "ERROR: Your device seems to be disconnected. If not, try reseating the USB cable",
+                duration = SnackbarDuration.Long
+            )
         }
     }
 }
@@ -166,7 +194,6 @@ private fun MainTopBar() {
     BasicTopBar(
         title = stringResource(R.string.app_name),
         actions = {
-            DirectInputIconButton()
             IconButton(onClick = { showDropdownMenu = true }) {
                 Icon(
                     imageVector = Icons.Outlined.MoreVert,
@@ -220,30 +247,115 @@ private fun MainTopBar() {
 }
 
 @Composable
-private fun CreateCharDevicesAlertDialog(showAlert: MutableState<Boolean>, mainViewModel: MainViewModel = viewModel()) {
-    AlertDialog(
-        title = { Text("Character device(s) do not exist") },
-        text = { Text("Add HID functions to the default USB gadget? This must be re-done after every reboot.\n\n**The app will not work if you decline**") },
-        confirmButton = {
+private fun MainBottomBar(
+    modifier: Modifier = Modifier,
+    hidUiUnlocked: Boolean,
+    controlsExpanded: Boolean,
+    usbOperationInProgress: Boolean,
+    onControlsClicked: () -> Unit,
+    onRestoreClicked: () -> Unit,
+    onRefreshClicked: () -> Unit,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        tonalElevation = 8.dp,
+        shadowElevation = 8.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .padding(horizontal = PaddingNormal / 2),
+            horizontalArrangement = Arrangement.spacedBy(PaddingNormal / 2),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DirectInputIconButton(enabled = hidUiUnlocked)
             TextButton(
-                content = { Text("YES") },
-                onClick = {
-                    mainViewModel.createCharacterDevices()
-                    showAlert.value = false
+                enabled = hidUiUnlocked,
+                onClick = onControlsClicked,
+            ) {
+                Text(if (controlsExpanded) "Hide" else "Keys")
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            TextButton(
+                enabled = !usbOperationInProgress,
+                onClick = onRestoreClicked,
+            ) {
+                Text("Restore")
+            }
+            TextButton(
+                enabled = !usbOperationInProgress,
+                onClick = onRefreshClicked,
+            ) {
+                Text("Refresh")
+            }
+        }
+    }
+}
+
+@Composable
+private fun HidActivationDialog(
+    uiState: MyUiState,
+    missingRoot: Boolean,
+    mainViewModel: MainViewModel,
+) {
+    val permissionPath = uiState.isCharacterDevicePermissionsBroken
+    val title = when {
+        missingRoot -> "Root access required"
+        uiState.usbOperationInProgress -> "Preparing HID profile"
+        permissionPath != null -> "Repair HID access"
+        else -> "Activate HID profile"
+    }
+    val body = when {
+        missingRoot -> "Grant root in Magisk before using keyboard or mouse controls."
+        uiState.usbOperationInProgress -> uiState.usbStatusMessage
+        permissionPath != null -> "The profile is active, but the app cannot write to $permissionPath yet."
+        else -> uiState.usbStatusMessage
+    }
+
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(PaddingNormal)) {
+                Text(body)
+                if (uiState.usbOperationInProgress) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(PaddingNormal / 2),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator()
+                        Text(
+                            text = "Activating module, waiting for HID nodes, and applying access rules.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
-            )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !uiState.usbOperationInProgress && !missingRoot,
+                onClick = {
+                    if (permissionPath != null) {
+                        mainViewModel.fixCharacterDevicePermissions(permissionPath)
+                    } else {
+                        mainViewModel.createCharacterDevices()
+                    }
+                },
+            ) {
+                Text(if (permissionPath != null) "Repair" else "Activate")
+            }
         },
         dismissButton = {
             TextButton(
-                content = { Text("NO") },
-                onClick = {
-                    showAlert.value = false
-                }
-            )
+                enabled = !uiState.usbOperationInProgress,
+                onClick = { mainViewModel.refreshUsbStatus() },
+            ) {
+                Text("Refresh")
+            }
         },
-        onDismissRequest = {
-            // Intentionally blocking dialog dismissal here since I want the user to make a conscious decision
-        }
     )
 }
 

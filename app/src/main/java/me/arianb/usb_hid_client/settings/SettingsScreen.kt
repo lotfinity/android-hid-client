@@ -16,16 +16,13 @@ import me.arianb.usb_hid_client.R
 import me.arianb.usb_hid_client.settings.AppSettings.AppThemePreference
 import me.arianb.usb_hid_client.settings.AppSettings.ClearManualInputOnSend
 import me.arianb.usb_hid_client.settings.AppSettings.DynamicColors
-import me.arianb.usb_hid_client.settings.AppSettings.EnablePrecisionTouchpad
 import me.arianb.usb_hid_client.settings.AppSettings.ExperimentalMode
-import me.arianb.usb_hid_client.settings.AppSettings.FullyDisableGadgetDuringConfiguration
 import me.arianb.usb_hid_client.settings.AppSettings.KeyboardCharacterDevicePath
 import me.arianb.usb_hid_client.settings.AppSettings.MediaKeyPassthrough
 import me.arianb.usb_hid_client.settings.AppSettings.PreferenceCategory
 import me.arianb.usb_hid_client.settings.AppSettings.TouchpadCharacterDevicePath
 import me.arianb.usb_hid_client.settings.AppSettings.TouchpadFullscreenInLandscape
 import me.arianb.usb_hid_client.settings.AppSettings.TouchpadLoopbackMode
-import me.arianb.usb_hid_client.settings.AppSettings.UsbGadgetPath
 import me.arianb.usb_hid_client.ui.theme.PaddingNormal
 import me.arianb.usb_hid_client.ui.theme.isDynamicColorAvailable
 import me.arianb.usb_hid_client.ui.utils.BasicPage
@@ -75,7 +72,6 @@ fun SettingsPage() {
         ) {
             TouchpadFullscreenInLandscape()
             TouchpadLoopbackMode()
-            EnablePrecisionTouchpad()
         }
 
         // only set `showDivider = false` for the last category.
@@ -92,8 +88,6 @@ fun SettingsPage() {
                 title = stringResource(R.string.device_specific_quirks_header),
                 showDivider = false
             ) {
-                FullyDisableGadgetDuringConfiguration()
-                UsbGadgetPath()
                 KeyboardCharacterDevicePath()
                 TouchpadCharacterDevicePath()
             }
@@ -191,29 +185,11 @@ private object AppSettings {
     }
 
     @Composable
-    fun EnablePrecisionTouchpad() {
-        SwitchPreference(
-            title = stringResource(R.string.enable_precision_touchpad_title),
-            summary = stringResource(R.string.enable_precision_touchpad_summary),
-            preference = AppPreference.EnablePrecisionTouchpad
-        )
-    }
-
-    @Composable
     fun ExperimentalMode() {
         SwitchPreference(
             title = stringResource(R.string.experimental_mode_title),
             summary = stringResource(R.string.experimental_mode_summary),
             preference = AppPreference.ExperimentalMode
-        )
-    }
-
-    @Composable
-    fun UsbGadgetPath() {
-        TextDialogPreference(
-            title = stringResource(R.string.usb_gadget_path_title),
-            preference = AppPreference.UsbGadgetPathPref,
-            property = UserPreferences::usbGadgetPath
         )
     }
 
@@ -235,14 +211,6 @@ private object AppSettings {
         )
     }
 
-    @Composable
-    fun FullyDisableGadgetDuringConfiguration() {
-        SwitchPreference(
-            title = stringResource(R.string.disable_gadget_functions_during_config),
-            summary = stringResource(R.string.disable_gadget_functions_during_config_summary),
-            preference = AppPreference.DisableGadgetFunctionsDuringConfiguration
-        )
-    }
 }
 
 @DarkLightModePreviews

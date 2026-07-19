@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.arianb.usb_hid_client.hid_utils.CharacterDeviceManager
+import me.arianb.usb_hid_client.hid_utils.C2qUsbController
 import me.arianb.usb_hid_client.hid_utils.DevicePath
 import me.arianb.usb_hid_client.hid_utils.ModifiesStateDirectly
 import me.arianb.usb_hid_client.hid_utils.TouchpadDevicePath
@@ -18,8 +19,6 @@ import me.arianb.usb_hid_client.report_senders.KeySender
 import me.arianb.usb_hid_client.report_senders.pointer_device_senders.LoopbackTouchpadSender
 import me.arianb.usb_hid_client.report_senders.pointer_device_senders.MouseSender
 import me.arianb.usb_hid_client.report_senders.pointer_device_senders.PointerDeviceSender
-import me.arianb.usb_hid_client.report_senders.pointer_device_senders.TouchpadSender
-import me.arianb.usb_hid_client.settings.GadgetUserPreferences
 import me.arianb.usb_hid_client.settings.UserPreferencesRepository
 import me.arianb.usb_hid_client.shell_utils.RootStateHolder
 import timber.log.Timber
@@ -35,7 +34,12 @@ data class MyUiState(
     val isCharacterDevicePermissionsBroken: String? = null,
 
     // Other Stuff
-    val isDeviceUnplugged: Boolean = false
+    val isDeviceUnplugged: Boolean = false,
+
+    // c2q companion module state
+    val usbOperationInProgress: Boolean = false,
+    val usbProfileActive: Boolean = false,
+    val usbStatusMessage: String = "Checking c2q USB state…",
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -59,8 +63,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (it.isLoopbackModeEnabled) {
                 fixCharacterDevicePermissions(UHID.PATH)
                 LoopbackTouchpadSender(TouchpadDevicePath(UHID.PATH))
-            } else if (it.enablePrecisionTouchpad) {
-                TouchpadSender(it.touchpadCharacterDevicePath)
             } else {
                 MouseSender(it.touchpadCharacterDevicePath)
             }
@@ -69,6 +71,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val senderFlowList = listOf(keySender, touchpadSender)
 
     init {
+        refreshUsbStatus()
+
         senderFlowList.forEach { senderFlow ->
             viewModelScope.launch {
                 senderFlow.collectLatest { sender ->
@@ -76,7 +80,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         onSuccess = {
                             // This is called when no exception was thrown, meaning everything is good :)
                             // so let's set the UI state back to default (no errors)
-                            _uiState.update { MyUiState() }
+                            _uiState.update {
+                                it.copy(
+                                    missingCharacterDevice = false,
+                                    isCharacterDevicePermissionsBroken = null,
+                                    isDeviceUnplugged = false,
+                                )
+                            }
                         },
                         onException = { e ->
                             val characterDevicePath = sender.characterDevicePath
@@ -114,18 +124,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Character Device Manager
+    @OptIn(ModifiesStateDirectly::class)
     fun createCharacterDevices() {
         if (!rootStateHolder.hasRootPermissions()) {
             Timber.w("Can't create character devices, missing root permissions")
             return
         }
 
+        _uiState.update { it.copy(usbOperationInProgress = true, usbStatusMessage = "Activating keyboard + mouse…") }
         viewModelScope.launch {
-            val gadgetUserPreferences = GadgetUserPreferences.fromUserPreferences(userPreferencesStateFlow.value)
-            characterDeviceManager.createCharacterDevices(gadgetUserPreferences)
-
-            // Re-evaluate state
-            anyCharacterDeviceMissing()
+            val result = characterDeviceManager.createCharacterDevices()
+            val missing = characterDeviceManager.anyCharacterDeviceMissing()
+            val active = C2qUsbController.isTemporaryProfileActive()
+            _uiState.update {
+                it.copy(
+                    usbOperationInProgress = false,
+                    usbProfileActive = active,
+                    usbStatusMessage = result.message,
+                    missingCharacterDevice = missing,
+                )
+            }
         }
     }
 
@@ -135,22 +153,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        _uiState.update { it.copy(usbOperationInProgress = true, usbStatusMessage = "Restoring Samsung USB…") }
         viewModelScope.launch {
-            val gadgetUserPreferences = GadgetUserPreferences.fromUserPreferences(userPreferencesStateFlow.value)
-            characterDeviceManager.deleteCharacterDevices(gadgetUserPreferences)
-
-            // Re-evaluate state
-            anyCharacterDeviceMissing()
+            val result = characterDeviceManager.deleteCharacterDevices()
+            val active = C2qUsbController.isTemporaryProfileActive()
+            _uiState.update {
+                it.copy(
+                    usbOperationInProgress = false,
+                    usbProfileActive = active,
+                    usbStatusMessage = result.message,
+                    missingCharacterDevice = true,
+                )
+            }
         }
     }
 
+    fun refreshUsbStatus() {
+        viewModelScope.launch {
+            val result = C2qUsbController.status()
+            val active = C2qUsbController.isTemporaryProfileActive()
+            _uiState.update {
+                it.copy(
+                    usbProfileActive = active,
+                    usbStatusMessage = result.message,
+                    missingCharacterDevice = !active,
+                )
+            }
+        }
+    }
+
+    @OptIn(ModifiesStateDirectly::class)
     fun fixCharacterDevicePermissions(device: String) {
         if (!rootStateHolder.hasRootPermissions()) {
             Timber.w("Can't fix character device permissions, missing root permissions")
             return
         }
 
-        characterDeviceManager.fixCharacterDevicePermissions(device)
+        _uiState.update { it.copy(usbOperationInProgress = true, usbStatusMessage = "Repairing HID node access…") }
+        viewModelScope.launch {
+            val permissionsReady = characterDeviceManager.fixCharacterDevicePermissions(device)
+            val missing = characterDeviceManager.anyCharacterDeviceMissing()
+            val active = C2qUsbController.isTemporaryProfileActive()
+            _uiState.update {
+                it.copy(
+                    usbOperationInProgress = false,
+                    usbProfileActive = active,
+                    usbStatusMessage = if (permissionsReady) {
+                        "HID access repaired"
+                    } else {
+                        "Could not repair HID access"
+                    },
+                    missingCharacterDevice = missing,
+                    isCharacterDevicePermissionsBroken = if (permissionsReady) null else device,
+                )
+            }
+        }
     }
 
     @OptIn(ModifiesStateDirectly::class)
