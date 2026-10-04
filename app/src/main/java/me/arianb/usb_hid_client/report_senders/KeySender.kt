@@ -4,9 +4,10 @@ import me.arianb.usb_hid_client.hid_utils.KeyboardDevicePath
 import timber.log.Timber
 
 class KeySender(
-    keyboardDevicePath: KeyboardDevicePath
+    keyboardDevicePath: KeyboardDevicePath,
+    transport: ((ByteArray) -> Unit)? = null,
 ) : ReportSender(
-    keyboardDevicePath
+    keyboardDevicePath, transport
 ) {
     fun addStandardKey(modifier: Byte, key: Byte) {
         super.addReportToChannel(bootKeyboardReport(modifier, key))

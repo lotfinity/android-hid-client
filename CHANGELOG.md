@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-10-04 - Bluetooth HID
+
+- Added classic Bluetooth HID keyboard and relative mouse support through Android's HID device API.
+- Reused the existing keyboard, shortcuts, mouse buttons, touchpad gestures, and scrolling through selectable report transports.
+- Added Nearby devices permission handling, temporary discoverability, paired host selection, connection status, and USB/Bluetooth switching.
+- Remembered the selected transport and released Bluetooth keys/buttons when pausing or closing the connection.
+- Added a separate debug installation option for testing without the original app signing key.
+
+Validation:
+
+- `./gradlew --no-daemon assembleDebug` passed.
+- `./gradlew --no-daemon --max-workers=2 -PisolatedBluetoothTest=true assembleDebug testDebugUnitTest` passed; 5 tests, no failures.
+- Installed the Bluetooth test app alongside the original companion on the user's Note20 Ultra.
+- User confirmed Bluetooth input worked; Windows enumerated the phone, Bluetooth HID device, keyboard, and mouse with healthy device status.
+
 ## 2026-07-19 - C2Q Companion Integration
 
 - Reworked the C2Q fork to use the `c2q-nethunter-companion` Magisk module for USB HID activation and restore instead of editing USB ConfigFS directly from the app.

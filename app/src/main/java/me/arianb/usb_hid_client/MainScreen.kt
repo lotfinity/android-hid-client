@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,11 +43,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import me.arianb.usb_hid_client.input_views.DirectInput
+import me.arianb.usb_hid_client.input_views.BluetoothConnectionDialog
 import me.arianb.usb_hid_client.input_views.DirectInputIconButton
 import me.arianb.usb_hid_client.input_views.HidShortcutPanel
 import me.arianb.usb_hid_client.input_views.MouseButtonBar
@@ -83,8 +88,18 @@ fun MainPage(
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showShortcutPanel by remember { mutableStateOf(false) }
+    var showBluetoothDialog by remember { mutableStateOf(false) }
+    val bluetoothState by mainViewModel.bluetooth.state.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, mainViewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) mainViewModel.bluetooth.releaseAll()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
-    val hidUiUnlocked = uiState.usbProfileActive &&
+    val hidUiUnlocked = if (uiState.bluetoothMode) bluetoothState.connected else uiState.usbProfileActive &&
         !uiState.missingCharacterDevice &&
         uiState.isCharacterDevicePermissionsBroken == null &&
         !rootState.missingRootPrivileges
@@ -155,17 +170,30 @@ fun MainPage(
                         onControlsClicked = { showShortcutPanel = !showShortcutPanel },
                         onRestoreClicked = {
                             showShortcutPanel = false
-                            mainViewModel.deleteCharacterDevices()
+                            if (uiState.bluetoothMode) mainViewModel.selectUsb() else mainViewModel.deleteCharacterDevices()
                         },
-                        onRefreshClicked = { mainViewModel.refreshUsbStatus() },
+                        onRefreshClicked = {
+                            if (uiState.bluetoothMode) mainViewModel.bluetooth.refreshHosts() else mainViewModel.refreshUsbStatus()
+                        },
+                        onBluetoothClicked = { showBluetoothDialog = true; mainViewModel.bluetooth.refreshHosts() },
+                        bluetoothMode = uiState.bluetoothMode,
                     )
 
-                    if (!hidUiUnlocked || uiState.usbOperationInProgress) {
+                    if ((!hidUiUnlocked || uiState.usbOperationInProgress) && !uiState.bluetoothMode && !showBluetoothDialog) {
                         HidActivationDialog(
                             uiState = uiState,
                             missingRoot = rootState.missingRootPrivileges,
                             mainViewModel = mainViewModel,
+                            onBluetoothClicked = { showBluetoothDialog = true },
                         )
+                    }
+                    if (showBluetoothDialog) BluetoothConnectionDialog(mainViewModel) { showBluetoothDialog = false }
+                    if (uiState.bluetoothMode && !hidUiUnlocked && !showBluetoothDialog) {
+                        Column(modifier = Modifier.align(Alignment.Center).padding(PaddingNormal)) {
+                            Text(bluetoothState.message)
+                            Button(onClick = { showBluetoothDialog = true }) { Text("Bluetooth connection") }
+                            TextButton(onClick = { mainViewModel.selectUsb() }) { Text("Use USB") }
+                        }
                     }
                 }
             }
@@ -255,6 +283,8 @@ private fun MainBottomBar(
     onControlsClicked: () -> Unit,
     onRestoreClicked: () -> Unit,
     onRefreshClicked: () -> Unit,
+    onBluetoothClicked: () -> Unit,
+    bluetoothMode: Boolean,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -278,10 +308,13 @@ private fun MainBottomBar(
             }
             Spacer(modifier = Modifier.weight(1f))
             TextButton(
+                onClick = onBluetoothClicked,
+            ) { Text("BT") }
+            TextButton(
                 enabled = !usbOperationInProgress,
                 onClick = onRestoreClicked,
             ) {
-                Text("Restore")
+                Text(if (bluetoothMode) "USB" else "Restore")
             }
             TextButton(
                 enabled = !usbOperationInProgress,
@@ -298,6 +331,7 @@ private fun HidActivationDialog(
     uiState: MyUiState,
     missingRoot: Boolean,
     mainViewModel: MainViewModel,
+    onBluetoothClicked: () -> Unit,
 ) {
     val permissionPath = uiState.isCharacterDevicePermissionsBroken
     val title = when {
@@ -319,6 +353,7 @@ private fun HidActivationDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(PaddingNormal)) {
                 Text(body)
+                TextButton(onClick = onBluetoothClicked) { Text("Use Bluetooth instead") }
                 if (uiState.usbOperationInProgress) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),

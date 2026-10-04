@@ -10,7 +10,8 @@ import java.io.FileOutputStream
 import java.io.IOException
 
 abstract class ReportSender(
-    val characterDevicePath: DevicePath
+    val characterDevicePath: DevicePath,
+    private val transport: ((ByteArray) -> Unit)? = null,
 ) {
     private val reportsChannel = Channel<ByteArray>(Channel.UNLIMITED) {
         Timber.wtf("A channel with an unlimited buffer shouldn't be failing to receive elements")
@@ -50,6 +51,7 @@ abstract class ReportSender(
     // Writes HID report to character device
     @Throws(IOException::class, FileNotFoundException::class)
     fun writeBytes(report: ByteArray) {
+        transport?.let { it(report); return }
         FileOutputStream(characterDevicePath.path).use { outputStream ->
             outputStream.write(report)
         }

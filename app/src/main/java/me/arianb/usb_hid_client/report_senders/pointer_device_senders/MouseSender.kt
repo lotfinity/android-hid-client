@@ -3,8 +3,9 @@ package me.arianb.usb_hid_client.report_senders.pointer_device_senders
 import me.arianb.usb_hid_client.hid_utils.TouchpadDevicePath
 class MouseSender(
     mouseDevicePath: TouchpadDevicePath,
+    transport: ((ByteArray) -> Unit)? = null,
 ) : PointerDeviceSender(
-    mouseDevicePath
+    mouseDevicePath, transport
 ) {
     private data class Coordinates<T>(val x: T, val y: T)
 

@@ -1,15 +1,22 @@
 package me.arianb.usb_hid_client
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.arianb.usb_hid_client.hid_utils.CharacterDeviceManager
+import me.arianb.usb_hid_client.hid_utils.BluetoothHidController
 import me.arianb.usb_hid_client.hid_utils.C2qUsbController
 import me.arianb.usb_hid_client.hid_utils.DevicePath
 import me.arianb.usb_hid_client.hid_utils.ModifiesStateDirectly
@@ -24,6 +31,7 @@ import me.arianb.usb_hid_client.shell_utils.RootStateHolder
 import timber.log.Timber
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.io.FileOutputStream
 
 /**
  * Data class that represents the UI state
@@ -40,38 +48,46 @@ data class MyUiState(
     val usbOperationInProgress: Boolean = false,
     val usbProfileActive: Boolean = false,
     val usbStatusMessage: String = "Checking c2q USB state…",
+    val bluetoothMode: Boolean = false,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val _uiState = MutableStateFlow(MyUiState())
+    private val connectionPreferences = application.getSharedPreferences("hid_connection", Context.MODE_PRIVATE)
+    private val initialBluetoothMode = connectionPreferences.getBoolean("bluetooth", application.packageName.endsWith(".bluetooth_test"))
+    private val _uiState = MutableStateFlow(MyUiState(bluetoothMode = initialBluetoothMode))
     val uiState: StateFlow<MyUiState> = _uiState
+    val bluetooth = BluetoothHidController(application)
+    private val bluetoothMode = MutableStateFlow(initialBluetoothMode)
 
     private val characterDeviceManager = CharacterDeviceManager.getInstance(application)
     private val rootStateHolder = RootStateHolder.getInstance()
     private val userPreferencesStateFlow = UserPreferencesRepository.getInstance(application).userPreferencesFlow
+    private val bluetoothConnected = bluetooth.state.map { it.connected }.distinctUntilChanged()
+    private val senderPreferences = combine(userPreferencesStateFlow, bluetoothMode, bluetoothConnected) { prefs, bt, connected -> Triple(prefs, bt, connected) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Triple(userPreferencesStateFlow.value, initialBluetoothMode, false))
 
-    val keySender: StateFlow<KeySender> = userPreferencesStateFlow
-        .mapState {
-            KeySender(it.keyboardCharacterDevicePath)
+    val keySender: StateFlow<KeySender> = senderPreferences
+        .mapState { (prefs, bt) ->
+            KeySender(prefs.keyboardCharacterDevicePath, transport(bt, 1, prefs.keyboardCharacterDevicePath))
         }
 
-    val touchpadSender: StateFlow<PointerDeviceSender> = userPreferencesStateFlow
-        .mapState {
+    val touchpadSender: StateFlow<PointerDeviceSender> = senderPreferences
+        .mapState { (prefs, bt) ->
             // TODO:
             //  maybe make it clear to the user that the Loopback Mode always uses precision touchpad, and that these
             //  settings are therefore mutually exclusive.
-            if (it.isLoopbackModeEnabled) {
+            if (prefs.isLoopbackModeEnabled && !bt) {
                 fixCharacterDevicePermissions(UHID.PATH)
                 LoopbackTouchpadSender(TouchpadDevicePath(UHID.PATH))
             } else {
-                MouseSender(it.touchpadCharacterDevicePath)
+                MouseSender(prefs.touchpadCharacterDevicePath, transport(bt, 2, prefs.touchpadCharacterDevicePath))
             }
         }
 
     private val senderFlowList = listOf(keySender, touchpadSender)
 
     init {
-        refreshUsbStatus()
+        if (!initialBluetoothMode) refreshUsbStatus()
 
         senderFlowList.forEach { senderFlow ->
             viewModelScope.launch {
@@ -89,6 +105,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         },
                         onException = { e ->
+                            if (bluetoothMode.value) {
+                                bluetooth.updateMessage(e.message ?: "Bluetooth report failed")
+                                return@start
+                            }
                             val characterDevicePath = sender.characterDevicePath
                             if (e is FileNotFoundException && characterDeviceMissing(characterDevicePath)) {
                                 Timber.i("Character device '$characterDevicePath' doesn't exist. The user probably skipped the character device creation prompt.")
@@ -100,6 +120,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun transport(bt: Boolean, reportId: Int, path: DevicePath): (ByteArray) -> Unit = { report ->
+        if (bluetoothMode.value != bt) throw IOException("Input connection changed")
+        if (bt) bluetooth.send(reportId, report)
+        else FileOutputStream(path.path).use { it.write(report) }
+    }
+
+    fun selectBluetooth() {
+        connectionPreferences.edit().putBoolean("bluetooth", true).apply()
+        bluetoothMode.value = true
+        _uiState.update { it.copy(bluetoothMode = true, isDeviceUnplugged = false) }
+    }
+
+    fun selectUsb() {
+        connectionPreferences.edit().putBoolean("bluetooth", false).apply()
+        bluetooth.stop()
+        bluetoothMode.value = false
+        _uiState.update { it.copy(bluetoothMode = false) }
+        refreshUsbStatus()
+    }
+
+    override fun onCleared() {
+        bluetooth.stop()
+        super.onCleared()
     }
 
     private fun handleException(e: IOException, devicePath: DevicePath) {

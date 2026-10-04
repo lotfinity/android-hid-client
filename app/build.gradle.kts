@@ -16,8 +16,9 @@ android {
         compileSdk = 35
 
         // App Versioning
-        versionCode = 303
-        versionName = "v3.0.1-c2q5"
+        versionCode = 304
+        versionName = "v3.0.1-c2q6-bt"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -32,6 +33,13 @@ android {
 
     // Build configuration
     buildTypes {
+        getByName("debug") {
+            if (providers.gradleProperty("isolatedBluetoothTest").orNull == "true") {
+                applicationIdSuffix = ".bluetooth_test"
+                resValue("string", "bluetooth_test_app_name", "c2q HID Client (Bluetooth test)")
+                manifestPlaceholders["appLabel"] = "@string/bluetooth_test_app_name"
+            }
+        }
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
