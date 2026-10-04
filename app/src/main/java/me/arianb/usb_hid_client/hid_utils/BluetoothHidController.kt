@@ -30,6 +30,14 @@ data class BluetoothHidState(
 @SuppressLint("MissingPermission") // Each public entry point checks CONNECT; callback errors are handled too.
 class BluetoothHidController(context: Context) {
     private val app = context.applicationContext
+    private val preferences = app.getSharedPreferences("bluetooth_hosts", Context.MODE_PRIVATE)
+    fun lastHost(): BluetoothHost? {
+        val address = preferences.getString("address", null) ?: return null
+        return state.value.hosts.firstOrNull { it.address == address }
+    }
+    fun reconnectLastHost() {
+        if (!state.value.registered) start() else lastHost()?.let { connect(it.address) }
+    }
     private val adapter = app.getSystemService(BluetoothManager::class.java)?.adapter
     private val handler = Handler(Looper.getMainLooper())
     private val executor = Executor { handler.post(it) }
@@ -121,6 +129,15 @@ class BluetoothHidController(context: Context) {
                 else "Bluetooth HID stopped. Keep this app in the foreground and enable it again.") }
             if (!registered) { requested = false; host = null }
             refreshHosts()
+            if (registered && !state.value.connected) {
+                val previous = lastHost()
+                if (previous != null) {
+                    val device = adapter?.getRemoteDevice(previous.address)
+                    if (device != null && service?.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED) {
+                        onConnectionStateChanged(device, BluetoothProfile.STATE_CONNECTED)
+                    } else connect(previous.address)
+                }
+            }
         }
 
         override fun onConnectionStateChanged(device: BluetoothDevice, connectionState: Int) {
@@ -128,6 +145,7 @@ class BluetoothHidController(context: Context) {
             when (connectionState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     host = device
+                    preferences.edit().putString("address", device.address).apply()
                     reportProtocol = true
                     synchronized(reports) { reports[1] = ByteArray(8); reports[2] = ByteArray(4) }
                     mutableState.update { it.copy(connected = true, message = "Connected to ${device.name ?: device.address}") }

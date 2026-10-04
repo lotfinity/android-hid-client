@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -458,6 +460,9 @@ fun MouseButtonBar(
     val touchpadSender by mainViewModel.touchpadSender.collectAsState()
     val mouseSender = touchpadSender as? MouseSender
     var leftLocked by remember { mutableStateOf(false) }
+    DisposableEffect(mouseSender) {
+        onDispose { mouseSender?.leftUp(); mouseSender?.middleUp(); mouseSender?.rightUp() }
+    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -472,13 +477,14 @@ fun MouseButtonBar(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             MouseHoldButton(
-                label = "L",
+                label = "Left",
                 modifier = Modifier.weight(1f),
                 enabled = mouseSender != null && !leftLocked,
                 onDown = { mouseSender?.leftDown() },
                 onUp = { mouseSender?.leftUp() },
             )
             OutlinedButton(
+                contentPadding = PaddingValues(horizontal = 8.dp),
                 modifier = Modifier
                     .weight(1.25f)
                     .sizeIn(minHeight = 56.dp),
@@ -493,17 +499,17 @@ fun MouseButtonBar(
                     leftLocked = !leftLocked
                 },
             ) {
-                Text(if (leftLocked) "Release L" else "Hold L")
+                Text(if (leftLocked) "Release" else "Drag")
             }
             MouseHoldButton(
-                label = "M",
+                label = "Wheel",
                 modifier = Modifier.weight(1f),
                 enabled = mouseSender != null,
                 onDown = { mouseSender?.middleDown() },
                 onUp = { mouseSender?.middleUp() },
             )
             MouseHoldButton(
-                label = "R",
+                label = "Right",
                 modifier = Modifier.weight(1f),
                 enabled = mouseSender != null,
                 onDown = { mouseSender?.rightDown() },
@@ -524,6 +530,7 @@ private fun MouseHoldButton(
     var pressed by remember { mutableStateOf(false) }
 
     Button(
+        contentPadding = PaddingValues(horizontal = 8.dp),
         modifier = modifier
             .sizeIn(minHeight = 56.dp)
             .pointerInteropFilter { event ->
@@ -549,6 +556,6 @@ private fun MouseHoldButton(
         enabled = enabled,
         onClick = {},
     ) {
-        Text(label)
+        Text(label, maxLines = 1)
     }
 }

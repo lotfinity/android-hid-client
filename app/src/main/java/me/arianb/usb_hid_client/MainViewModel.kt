@@ -53,9 +53,16 @@ data class MyUiState(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val connectionPreferences = application.getSharedPreferences("hid_connection", Context.MODE_PRIVATE)
-    private val initialBluetoothMode = connectionPreferences.getBoolean("bluetooth", application.packageName.endsWith(".bluetooth_test"))
+    private val initialBluetoothMode = connectionPreferences.getBoolean("bluetooth", true)
     private val _uiState = MutableStateFlow(MyUiState(bluetoothMode = initialBluetoothMode))
     val uiState: StateFlow<MyUiState> = _uiState
+    private val selectedInputModifiers = MutableStateFlow(0)
+    val inputModifiers: StateFlow<Int> = selectedInputModifiers
+    fun setInputModifiers(value: Int) { selectedInputModifiers.value = value and 0xff }
+    fun clearInputModifiers() = setInputModifiers(0)
+    fun addInputKey(modifier: Byte, key: Byte) {
+        keySender.value.addStandardKey((modifier.toInt() or selectedInputModifiers.value).toByte(), key)
+    }
     val bluetooth = BluetoothHidController(application)
     private val bluetoothMode = MutableStateFlow(initialBluetoothMode)
 
@@ -129,12 +136,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectBluetooth() {
+        clearInputModifiers()
         connectionPreferences.edit().putBoolean("bluetooth", true).apply()
         bluetoothMode.value = true
         _uiState.update { it.copy(bluetoothMode = true, isDeviceUnplugged = false) }
     }
 
     fun selectUsb() {
+        clearInputModifiers()
         connectionPreferences.edit().putBoolean("bluetooth", false).apply()
         bluetooth.stop()
         bluetoothMode.value = false

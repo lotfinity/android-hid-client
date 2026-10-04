@@ -47,6 +47,9 @@ fun BluetoothConnectionDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(PaddingSmall),
             ) {
                 Text(state.message)
+                if (!state.connected && bt.lastHost() != null) {
+                    Button(onClick = { vm.selectBluetooth(); bt.reconnectLastHost() }) { Text("Reconnect to "+bt.lastHost()?.name) }
+                }
                 Text("Keep this app open while using Bluetooth controls. Your computer receives a standard keyboard and mouse.")
                 if (!state.registered) {
                     Button(onClick = {
@@ -75,6 +78,6 @@ fun BluetoothConnectionDialog(vm: MainViewModel, onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-        dismissButton = { TextButton(onClick = { vm.selectUsb(); onDismiss() }) { Text("Use USB") } },
+        dismissButton = { TextButton(onClick = { if (vm.uiState.value.bluetoothMode) vm.selectUsb() else { vm.selectBluetooth(); bt.start() }; onDismiss() }) { Text(if (vm.uiState.value.bluetoothMode) "USB (requires root)" else "Use Bluetooth") } },
     )
 }

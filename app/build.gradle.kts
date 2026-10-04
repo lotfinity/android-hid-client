@@ -16,8 +16,8 @@ android {
         compileSdk = 35
 
         // App Versioning
-        versionCode = 304
-        versionName = "v3.0.1-c2q6-bt"
+        versionCode = 307
+        versionName = "v3.0.1-c2q9-modifiers"
         manifestPlaceholders["appLabel"] = "@string/app_name"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

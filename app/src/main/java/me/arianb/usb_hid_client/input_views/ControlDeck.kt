@@ -1,5 +1,8 @@
 package me.arianb.usb_hid_client.input_views
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -19,7 +22,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -53,7 +58,7 @@ private val quickKeys = listOf(
     SpecialKey("Tab", 0x2b),
     SpecialKey("Esc", 0x29),
     SpecialKey("Enter", 0x28),
-    SpecialKey("Bksp", 0x2a),
+    SpecialKey("Backspace", 0x2a),
     SpecialKey("↑", 0x52),
     SpecialKey("↓", 0x51),
     SpecialKey("←", 0x50),
@@ -99,6 +104,7 @@ fun HidControlDeck(
 @Composable
 fun HidShortcutPanel(
     mainViewModel: MainViewModel = viewModel(),
+    keyboardOnly: Boolean = false,
 ) {
     var activeModifier by remember { mutableIntStateOf(0) }
     var showAdvancedKeys by rememberSaveable { mutableStateOf(false) }
@@ -116,7 +122,7 @@ fun HidShortcutPanel(
                 verticalArrangement = Arrangement.spacedBy(PaddingSmall),
             ) {
                 Text(
-                    text = "Quick HID",
+                    text = "Keyboard keys",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -131,7 +137,7 @@ fun HidShortcutPanel(
                     ModifierChip("Ctrl", MOD_LEFT_CTRL, activeModifier) { activeModifier = it }
                     ModifierChip("Shift", MOD_LEFT_SHIFT, activeModifier) { activeModifier = it }
                     ModifierChip("Alt", MOD_LEFT_ALT, activeModifier) { activeModifier = it }
-                    ModifierChip("GUI", MOD_LEFT_GUI, activeModifier) { activeModifier = it }
+                    ModifierChip("Win / Cmd", MOD_LEFT_GUI, activeModifier) { activeModifier = it }
                     TextButton(onClick = { activeModifier = 0 }) {
                         Text("Clear")
                     }
@@ -141,12 +147,19 @@ fun HidShortcutPanel(
                     horizontalArrangement = Arrangement.spacedBy(PaddingSmall),
                     verticalArrangement = Arrangement.spacedBy(PaddingSmall),
                 ) {
-                    for (key in quickKeys) {
+                    for (key in quickKeys.take(4)) {
                         Button(
                             onClick = { mainViewModel.addStandardKey(activeModifier.toByte(), key.keyCode) },
                         ) {
                             Text(key.label)
                         }
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaddingSmall)) {
+                    quickKeys.drop(4).forEach { key ->
+                        Button(modifier = Modifier.weight(1f), onClick = {
+                            mainViewModel.addStandardKey(activeModifier.toByte(), key.keyCode)
+                        }) { Text(key.label) }
                     }
                 }
             }
@@ -163,68 +176,7 @@ fun HidShortcutPanel(
             KeyChipGroup(functionKeys, activeModifier, mainViewModel)
         }
 
-        CollapsibleCard(
-            title = "Combos",
-            subtitle = "Copy/paste, window switching, Ctrl+Alt+Del",
-            expanded = showCombos,
-            onExpandedChanged = { showCombos = it },
-        ) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(PaddingSmall),
-                verticalArrangement = Arrangement.spacedBy(PaddingSmall),
-            ) {
-                for (combo in commonCombos) {
-                    AssistChip(
-                        onClick = { mainViewModel.addStandardKey(combo.modifier, combo.keyCode) },
-                        label = { Text(combo.label) },
-                    )
-                }
-            }
-        }
-
-        CollapsibleCard(
-            title = "AI / Macro input",
-            subtitle = "Paste text and type it into the host",
-            expanded = showMacro,
-            onExpandedChanged = { showMacro = it },
-        ) {
-            Text(
-                text = "This sends plain text as keystrokes. Camera OCR and LLM wiring are next; they are not active yet.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = PaddingNormal * 5),
-                value = macroText,
-                onValueChange = { macroText = it },
-                label = { Text("Text to type on host") },
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(PaddingSmall),
-            ) {
-                Button(
-                    enabled = macroText.isNotEmpty(),
-                    onClick = { sendInput(macroText, mainViewModel) },
-                ) {
-                    Text("Send")
-                }
-                OutlinedButton(
-                    enabled = false,
-                    onClick = {},
-                ) {
-                    Text("OCR")
-                }
-                OutlinedButton(
-                    enabled = false,
-                    onClick = {},
-                ) {
-                    Text("LLM")
-                }
-            }
-        }
+        if (!keyboardOnly) SavedControlDeck(mainViewModel)
     }
 }
 
@@ -315,12 +267,36 @@ private fun modifierSummary(activeModifier: Int): String {
         if (activeModifier and MOD_LEFT_CTRL != 0) add("Ctrl")
         if (activeModifier and MOD_LEFT_SHIFT != 0) add("Shift")
         if (activeModifier and MOD_LEFT_ALT != 0) add("Alt")
-        if (activeModifier and MOD_LEFT_GUI != 0) add("GUI")
+        if (activeModifier and MOD_LEFT_GUI != 0) add("Win / Cmd")
     }
 
     return if (active.isEmpty()) {
         "Tap a key, or hold modifiers first."
     } else {
         "Next key sends with ${active.joinToString(" + ")}."
+    }
+}
+
+/** Scrollable key rows leave room for the touchpad when the phone keyboard is open. */
+@Composable
+fun InputKeyStrip(vm: MainViewModel) {
+    val modifiers by vm.inputModifiers.collectAsState()
+    Surface(tonalElevation = 2.dp) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModifierChip("Ctrl", MOD_LEFT_CTRL, modifiers) { vm.setInputModifiers(it) }
+                ModifierChip("Shift", MOD_LEFT_SHIFT, modifiers) { vm.setInputModifiers(it) }
+                ModifierChip("Alt", MOD_LEFT_ALT, modifiers) { vm.setInputModifiers(it) }
+                ModifierChip("Win / Cmd", MOD_LEFT_GUI, modifiers) { vm.setInputModifiers(it) }
+                TextButton(onClick = { vm.clearInputModifiers() }) { Text("Clear") }
+            }
+            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                (quickKeys + navigationKeys + functionKeys).forEach { key ->
+                    AssistChip(onClick = { vm.addInputKey(0, key.keyCode) }, label = { Text(key.label) })
+                }
+            }
+        }
     }
 }

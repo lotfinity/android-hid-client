@@ -9,10 +9,12 @@ import me.arianb.usb_hid_client.report_senders.KeySender
 import timber.log.Timber
 
 class MyInputConnection(
-    private val keySender: KeySender,
+    private val keySender: () -> KeySender,
     targetView: View,
-    fullEditor: Boolean
+    fullEditor: Boolean,
+    selectedModifiers: () -> Int = { 0 },
 ) : BaseInputConnection(targetView, fullEditor) {
+    private val router = InputKeyRouter(selectedModifiers) { modifier, key -> keySender().addStandardKey(modifier, key) }
     override fun sendKeyEvent(event: KeyEvent?): Boolean {
         if (event == null) {
             Timber.w("input connection received null KeyEvent")
@@ -23,6 +25,7 @@ class MyInputConnection(
         val keyCode = event.keyCode
         val action = event.action
 
+        if (action == KeyEvent.ACTION_MULTIPLE && event.characters != null) return router.sendText(event.characters)
         if (action != KeyEvent.ACTION_DOWN) {
             return false
         }
@@ -40,7 +43,7 @@ class MyInputConnection(
         // If this is one of the problematic keys, handle it early in a special way
         val problematicKeyScanCodePair = KeyCodeTranslation.problematicKeyEventKeys[keyCode]
         if (problematicKeyScanCodePair != null) {
-            keySender.addStandardKey(problematicKeyScanCodePair.first, problematicKeyScanCodePair.second)
+            router.sendKey(problematicKeyScanCodePair.first, problematicKeyScanCodePair.second)
             return true
         }
 
@@ -52,19 +55,23 @@ class MyInputConnection(
         }
 
         if (KeyCodeTranslation.isMediaKey(keyCode)) {
-            keySender.addMediaKey(keyScanCode)
+            keySender().addMediaKey(keyScanCode)
         } else {
             // Extract modifier from KeyEvent
             val modifiers = KeyCodeTranslation.getModifiersScanCode(event)
 
-            keySender.addStandardKey(modifiers, keyScanCode)
+            router.sendKey(modifiers, keyScanCode)
         }
 
         return true
     }
 
-    override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean {
-        Timber.w("input connection sending CharSequence: %s", text)
-        return super.commitText(text, newCursorPosition, textAttribute)
+    override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
+        val sent = router.sendText(text)
+        if (sent) editable?.clear()
+        return sent
     }
+
+    override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean =
+        commitText(text, newCursorPosition)
 }

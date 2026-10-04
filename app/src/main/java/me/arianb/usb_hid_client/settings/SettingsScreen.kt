@@ -12,6 +12,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.Navigator
+import me.arianb.usb_hid_client.MainViewModel
 import me.arianb.usb_hid_client.R
 import me.arianb.usb_hid_client.settings.AppSettings.AppThemePreference
 import me.arianb.usb_hid_client.settings.AppSettings.ClearManualInputOnSend
@@ -41,6 +42,8 @@ class SettingsScreen : Screen {
 @Composable
 fun SettingsPage() {
     val padding = PaddingNormal
+    val vm: MainViewModel = viewModel()
+    val connection by vm.uiState.collectAsState()
 
     BasicPage(
         topBar = { SettingsTopBar() },
@@ -71,7 +74,7 @@ fun SettingsPage() {
             title = stringResource(R.string.touchpad_label),
         ) {
             TouchpadFullscreenInLandscape()
-            TouchpadLoopbackMode()
+            if (!connection.bluetoothMode) TouchpadLoopbackMode()
         }
 
         // only set `showDivider = false` for the last category.
@@ -83,7 +86,7 @@ fun SettingsPage() {
         ) {
             ExperimentalMode()
         }
-        Experimental {
+        if (!connection.bluetoothMode) Experimental {
             PreferenceCategory(
                 title = stringResource(R.string.device_specific_quirks_header),
                 showDivider = false

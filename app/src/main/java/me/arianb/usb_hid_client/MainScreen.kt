@@ -1,5 +1,12 @@
 package me.arianb.usb_hid_client
 
+import android.app.Activity
+import android.graphics.Rect
+import android.os.Build
+import android.view.ViewTreeObserver
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import me.arianb.usb_hid_client.input_views.InputKeyStrip
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +37,14 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import me.arianb.usb_hid_client.input_views.SavedControlDeck
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -86,127 +101,116 @@ fun MainPage(
     val uiState by mainViewModel.uiState.collectAsState()
     Timber.d("in MainScreen, uiState is: %s", uiState.toString())
 
-    val snackbarHostState = remember { SnackbarHostState() }
-    var showShortcutPanel by remember { mutableStateOf(false) }
+    val inputModifiers by mainViewModel.inputModifiers.collectAsState()
+    val modifierLabel = listOf(1 to "Ctrl", 2 to "Shift", 4 to "Alt", 8 to "Win / Cmd").filter { inputModifiers and it.first != 0 }.joinToString("+") { it.second }
+    var showKeys by rememberSaveable { mutableStateOf(false) }
+    var keyboardVisible by remember { mutableStateOf(false) }
+    val hostView = LocalView.current
+    DisposableEffect(hostView) {
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            val visible = Rect()
+            hostView.getWindowVisibleDisplayFrame(visible)
+            val metrics = if (Build.VERSION.SDK_INT >= 30) (hostView.context as? Activity)?.windowManager?.currentWindowMetrics?.bounds else null
+            val windowBottom = metrics?.bottom ?: hostView.resources.displayMetrics.heightPixels
+            val windowHeight = metrics?.height() ?: hostView.resources.displayMetrics.heightPixels
+            keyboardVisible = ViewCompat.getRootWindowInsets(hostView)?.isVisible(WindowInsetsCompat.Type.ime()) == true ||
+                windowBottom - visible.bottom > windowHeight * 0.15f
+        }
+        hostView.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        onDispose { hostView.viewTreeObserver.removeOnGlobalLayoutListener(listener) }
+    }
+    var page by rememberSaveable { mutableStateOf(0) }
     var showBluetoothDialog by remember { mutableStateOf(false) }
     val bluetoothState by mainViewModel.bluetooth.state.collectAsState()
+    LaunchedEffect(Unit) {
+        if (uiState.bluetoothMode && mainViewModel.bluetooth.hasPermission() && mainViewModel.bluetooth.isEnabled()) mainViewModel.bluetooth.start()
+    }
+    val keyboard = LocalSoftwareKeyboardController.current
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, mainViewModel) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) mainViewModel.bluetooth.releaseAll()
+            if (event == Lifecycle.Event.ON_PAUSE) { mainViewModel.bluetooth.releaseAll(); mainViewModel.clearInputModifiers() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-
-    val hidUiUnlocked = if (uiState.bluetoothMode) bluetoothState.connected else uiState.usbProfileActive &&
-        !uiState.missingCharacterDevice &&
-        uiState.isCharacterDevicePermissionsBroken == null &&
+    val ready = if (uiState.bluetoothMode) bluetoothState.connected else uiState.usbProfileActive &&
+        !uiState.missingCharacterDevice && uiState.isCharacterDevicePermissionsBroken == null &&
         !rootState.missingRootPrivileges
 
+    DisposableEffect(ready, hostView) {
+        val previous = hostView.keepScreenOn
+        hostView.keepScreenOn = ready
+        onDispose { hostView.keepScreenOn = previous }
+    }
     USBHIDClientTheme {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
-        ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Scaffold(
                 topBar = { MainTopBar() },
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-            ) { innerPadding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                ) {
-                    if (hidUiUnlocked) {
-                        Touchpad(
-                            modifier = Modifier.fillMaxSize(),
-                            mainViewModel = mainViewModel,
-                            showBorder = false,
-                        )
-                        DirectInput(
-                            mainViewModel = mainViewModel,
-                            settingsViewModel = settingsViewModel,
-                        )
-                        MouseButtonBar(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 64.dp),
-                            mainViewModel = mainViewModel,
-                        )
-                    }
-
-                    if (showShortcutPanel && hidUiUnlocked) {
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .padding(
-                                    start = PaddingNormal,
-                                    end = PaddingNormal,
-                                    bottom = 144.dp,
-                                )
-                                .heightIn(max = 380.dp),
-                            shape = MaterialTheme.shapes.medium,
-                            tonalElevation = 6.dp,
-                            shadowElevation = 6.dp,
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(PaddingNormal),
-                            ) {
-                                HidShortcutPanel(mainViewModel = mainViewModel)
+                bottomBar = {
+                    Surface(tonalElevation = 8.dp) {
+                        TabRow(selectedTabIndex = page.coerceIn(0, 1), modifier = Modifier.navigationBarsPadding()) {
+                            listOf("Input", "Control Deck").forEachIndexed { index, label ->
+                                Tab(selected = page.coerceIn(0, 1) == index, onClick = {
+                                    mainViewModel.bluetooth.releaseAll()
+                                    mainViewModel.clearInputModifiers()
+                                    keyboard?.hide()
+                                    page = index
+                                }, text = { Text(label) })
                             }
                         }
                     }
-
-                    MainBottomBar(
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                        hidUiUnlocked = hidUiUnlocked,
-                        controlsExpanded = showShortcutPanel,
-                        usbOperationInProgress = uiState.usbOperationInProgress,
-                        onControlsClicked = { showShortcutPanel = !showShortcutPanel },
-                        onRestoreClicked = {
-                            showShortcutPanel = false
-                            if (uiState.bluetoothMode) mainViewModel.selectUsb() else mainViewModel.deleteCharacterDevices()
-                        },
-                        onRefreshClicked = {
-                            if (uiState.bluetoothMode) mainViewModel.bluetooth.refreshHosts() else mainViewModel.refreshUsbStatus()
-                        },
-                        onBluetoothClicked = { showBluetoothDialog = true; mainViewModel.bluetooth.refreshHosts() },
-                        bluetoothMode = uiState.bluetoothMode,
-                    )
-
-                    if ((!hidUiUnlocked || uiState.usbOperationInProgress) && !uiState.bluetoothMode && !showBluetoothDialog) {
-                        HidActivationDialog(
-                            uiState = uiState,
-                            missingRoot = rootState.missingRootPrivileges,
-                            mainViewModel = mainViewModel,
-                            onBluetoothClicked = { showBluetoothDialog = true },
-                        )
+                },
+                modifier = Modifier.imePadding(),
+            ) { padding ->
+                Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                    Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.padding(horizontal = PaddingNormal),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f).padding(vertical = 8.dp)) {
+                                Text(if (uiState.bluetoothMode) "Bluetooth" else "USB", style = MaterialTheme.typography.labelMedium)
+                                Text(if (uiState.bluetoothMode) bluetoothState.message else if (ready) "USB controls ready" else "USB setup required",
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = { keyboard?.hide(); showBluetoothDialog = true }) { Text("Connection") }
+                        }
                     }
-                    if (showBluetoothDialog) BluetoothConnectionDialog(mainViewModel) { showBluetoothDialog = false }
-                    if (uiState.bluetoothMode && !hidUiUnlocked && !showBluetoothDialog) {
-                        Column(modifier = Modifier.align(Alignment.Center).padding(PaddingNormal)) {
-                            Text(bluetoothState.message)
-                            Button(onClick = { showBluetoothDialog = true }) { Text("Bluetooth connection") }
-                            TextButton(onClick = { mainViewModel.selectUsb() }) { Text("Use USB") }
+                    if (ready) {
+                        when (page.coerceIn(0, 1)) {
+                            0 -> Column(modifier = Modifier.weight(1f)) {
+                                DirectInput(mainViewModel, settingsViewModel)
+                                Box(modifier = Modifier.weight(1f)) {
+                                    Touchpad(modifier = Modifier.fillMaxSize(), mainViewModel = mainViewModel, showBorder = false)
+                                    if (!keyboardVisible) Text("Tap to click · Two fingers to scroll", modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                                MouseButtonBar(mainViewModel = mainViewModel)
+                                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    DirectInputIconButton(keyboardVisible = keyboardVisible)
+                                    Text(if (keyboardVisible) "Hide keyboard" else "Show keyboard", style = MaterialTheme.typography.labelMedium)
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    TextButton(onClick = { showKeys = !showKeys }) { Text(if (showKeys) "Hide keys" else if (modifierLabel.isNotEmpty()) modifierLabel else "Special keys") }
+                                }
+                                if (showKeys) InputKeyStrip(mainViewModel)
+                            }
+                            1 -> Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(PaddingNormal)) {
+                                SavedControlDeck(mainViewModel)
+                            }
+                        }
+                    } else {
+                        Column(modifier = Modifier.weight(1f).fillMaxWidth().padding(PaddingNormal),
+                            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(if (uiState.bluetoothMode) "Connect a computer to start" else "USB requires root and the C2Q module")
+                            Button(onClick = { showBluetoothDialog = true }) { Text("Manage connection") }
                         }
                     }
                 }
+                if (showBluetoothDialog) BluetoothConnectionDialog(mainViewModel) { showBluetoothDialog = false }
+                if (!uiState.bluetoothMode && !ready && !showBluetoothDialog) {
+                    HidActivationDialog(uiState, rootState.missingRootPrivileges, mainViewModel) { showBluetoothDialog = true }
+                }
             }
-        }
-    }
-
-    LaunchedEffect(uiState) {
-        Timber.d("LAUNCHED EFFECT RUNNING WITH UI STATE = %s", uiState.toString())
-        if (uiState.isDeviceUnplugged) {
-            snackbarHostState.showSnackbar(
-                message = "ERROR: Your device seems to be disconnected. If not, try reseating the USB cable",
-                duration = SnackbarDuration.Long
-            )
         }
     }
 }
@@ -272,58 +276,6 @@ private fun MainTopBar() {
             }
         }
     )
-}
-
-@Composable
-private fun MainBottomBar(
-    modifier: Modifier = Modifier,
-    hidUiUnlocked: Boolean,
-    controlsExpanded: Boolean,
-    usbOperationInProgress: Boolean,
-    onControlsClicked: () -> Unit,
-    onRestoreClicked: () -> Unit,
-    onRefreshClicked: () -> Unit,
-    onBluetoothClicked: () -> Unit,
-    bluetoothMode: Boolean,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        tonalElevation = 8.dp,
-        shadowElevation = 8.dp,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(64.dp)
-                .padding(horizontal = PaddingNormal / 2),
-            horizontalArrangement = Arrangement.spacedBy(PaddingNormal / 2),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            DirectInputIconButton(enabled = hidUiUnlocked)
-            TextButton(
-                enabled = hidUiUnlocked,
-                onClick = onControlsClicked,
-            ) {
-                Text(if (controlsExpanded) "Hide" else "Keys")
-            }
-            Spacer(modifier = Modifier.weight(1f))
-            TextButton(
-                onClick = onBluetoothClicked,
-            ) { Text("BT") }
-            TextButton(
-                enabled = !usbOperationInProgress,
-                onClick = onRestoreClicked,
-            ) {
-                Text(if (bluetoothMode) "USB" else "Restore")
-            }
-            TextButton(
-                enabled = !usbOperationInProgress,
-                onClick = onRefreshClicked,
-            ) {
-                Text("Refresh")
-            }
-        }
-    }
 }
 
 @Composable

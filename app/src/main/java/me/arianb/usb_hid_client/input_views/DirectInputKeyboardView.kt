@@ -33,6 +33,8 @@ import timber.log.Timber
 
 class DirectInputKeyboardView : AppCompatEditText {
     private lateinit var keySender: KeySender
+    private var modifierProvider: () -> Int = { 0 }
+    fun setModifierProvider(provider: () -> Int) { modifierProvider = provider }
     private lateinit var myInputConnection: MyInputConnection
 
     constructor(context: Context) : super(context)
@@ -40,16 +42,17 @@ class DirectInputKeyboardView : AppCompatEditText {
     constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : super(context, attrs, defStyleAttr)
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.imeOptions = outAttrs.imeOptions or EditorInfo.IME_FLAG_NO_FULLSCREEN
         Timber.i("onCreateInputConnection() called")
-        if (keySender == null) {
+        if (!::keySender.isInitialized) {
             Timber.wtf("KEY SENDER IS NULL, SOMETHING IS TERRIBLY WRONG")
         }
-        myInputConnection = MyInputConnection(keySender, this, false)
+        myInputConnection = MyInputConnection({ keySender }, this, false) { modifierProvider() }
         return myInputConnection
     }
 
     fun sendKeyEvent(event: KeyEvent): Boolean {
-        return myInputConnection?.sendKeyEvent(event) ?: false
+        return if (::myInputConnection.isInitialized) myInputConnection.sendKeyEvent(event) else false
     }
 
     fun setKeySender(keySender: KeySender) {
@@ -77,6 +80,7 @@ fun DirectInput(
             etDirectInput.inputType = InputType.TYPE_NULL
 
             etDirectInput.setKeySender(keySender)
+            etDirectInput.setModifierProvider { mainViewModel.inputModifiers.value }
 
             // For some reason, the input connection doesn't receive media keys, but this listener *does*, so
             // I'm listening for them here and just passing them through.
@@ -101,7 +105,7 @@ fun DirectInput(
 }
 
 @Composable
-fun DirectInputIconButton(enabled: Boolean = true) {
+fun DirectInputIconButton(enabled: Boolean = true, keyboardVisible: Boolean = false) {
     val localView = LocalView.current
     val context = LocalContext.current
 
@@ -110,13 +114,17 @@ fun DirectInputIconButton(enabled: Boolean = true) {
         onClick = {
             val etDirectInput = localView.findViewById<DirectInputKeyboardView>(R.id.etDirectInput)
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            etDirectInput.requestFocus()
-            imm.showSoftInput(etDirectInput, 0)
+            if (keyboardVisible) {
+                imm.hideSoftInputFromWindow(localView.windowToken, 0)
+            } else {
+                etDirectInput?.requestFocus()
+                etDirectInput?.let { imm.showSoftInput(it, 0) }
+            }
         }
     ) {
         Icon(
             painter = painterResource(R.drawable.keyboard),
-            contentDescription = stringResource(R.string.direct_input)
+            contentDescription = if (keyboardVisible) "Hide keyboard" else "Show keyboard"
         )
     }
 }
